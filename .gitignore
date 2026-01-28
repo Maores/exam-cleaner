@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+
+# Logs / temp
+*.log
+error.txt
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Build outputs (PyInstaller)
+dist/
+build/
+*.spec
+
+# Exams / data (recommended)
+*.pdf

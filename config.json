@@ -1,0 +1,22 @@
+{
+  "strength_preset": "medium",
+  "output_preset": "balanced",
+  "export_dpi": 260,
+  "processing_mode": "pure_bw",
+  "threshold": 210,
+  "auto_threshold_method": "none",
+  "auto_contrast": false,
+  "contrast_factor": 1.3,
+  "highlight_removal": {
+    "enabled": true,
+    "saturation_threshold": 60,
+    "value_threshold": 100
+  },
+  "gray_suppression": {
+    "enabled": true,
+    "intensity": 0.5
+  },
+  "output_format": "jpeg",
+  "jpeg_quality": 90,
+  "preview_dpi_cap": 200
+}
