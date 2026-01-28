@@ -1,4 +1,4 @@
-# Study Safe PDF Converter
+# Exam Cleaner
 
 A Windows desktop application that converts exam PDFs into "study-safe" PDFs where colored AND gray answer markings/highlights are removed by converting pages to pure black/white.
 

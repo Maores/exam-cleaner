@@ -1,20 +1,20 @@
 {
-  "strength_preset": "low",
+  "strength_preset": "high",
   "output_preset": "high_quality",
   "export_dpi": 400,
   "processing_mode": "pure_bw",
-  "threshold": 200,
+  "threshold": 220,
   "auto_threshold_method": "none",
   "auto_contrast": false,
   "contrast_factor": 1.123931623931624,
   "highlight_removal": {
     "enabled": true,
-    "saturation_threshold": 80,
-    "value_threshold": 140
+    "saturation_threshold": 40,
+    "value_threshold": 80
   },
   "gray_suppression": {
-    "enabled": false,
-    "intensity": 0.0
+    "enabled": true,
+    "intensity": 0.7
   },
   "output_format": "png",
   "jpeg_quality": 90,

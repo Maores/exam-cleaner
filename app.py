@@ -1,21 +1,27 @@
 """
-Study Safe PDF Converter - Desktop Application
+Exam Cleaner - Desktop Application
 Modern Tkinter GUI with ttkbootstrap for converting exam PDFs to study-safe B/W PDFs.
 
 Workflow: Open PDF → Analyze → Review flagged pages → Export
 """
 
 import tkinter as tk
-from tkinter import filedialog, messagebox
-import ttkbootstrap as ttk
+from tkinter import ttk, filedialog, messagebox
+from tkinterdnd2 import DND_FILES, TkinterDnD
+import ttkbootstrap as tb
 from ttkbootstrap.constants import *
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
+import fitz  # PyMuPDF
 from pathlib import Path
 import threading
 import json
 import logging
 from typing import Optional
 import time
+try:
+    from ctypes import windll
+except ImportError:
+    windll = None
 
 from models import (
     Settings, ProcessingMode, AutoThresholdMethod, OutputFormat,
@@ -621,15 +627,26 @@ class PreviewCanvas(tk.Canvas):
             self._update_callback()
 
 
-class Application(ttk.Window):
+class Application(TkinterDnD.Tk):
     """Main application window with modern ttkbootstrap theme."""
     
     def __init__(self):
-        super().__init__(themename="flatly")
+        super().__init__()
+        self.style = tb.Style()
+        self.style.theme_use("flatly")
         
-        self.title("Study Safe PDF Converter")
-        self.geometry("1300x850")
-        self.minsize(900, 650)
+        self.title("Exam Cleaner")
+        # Increased default size and set minimum size
+        self.geometry("1280x850")
+        self.minsize(1024, 768)
+        
+        # Configure grid weights for the main window
+        self.grid_rowconfigure(1, weight=1)  # content expands
+        self.grid_columnconfigure(0, weight=1)  # full width
+        
+        # Enable Drag and Drop
+        self.drop_target_register(DND_FILES)
+        self.dnd_bind('<<Drop>>', self._on_drop)
         
         # State
         self._document: Optional[PDFDocument] = None
@@ -664,12 +681,16 @@ class Application(ttk.Window):
     
     def _build_ui(self) -> None:
         """Build the user interface."""
-        # Top toolbar
+        # Top toolbar (row 0)
         self._build_toolbar()
         
-        # Main content area
+        # Main content area (row 1)
         main_frame = ttk.Frame(self)
-        main_frame.pack(fill=BOTH, expand=True, padx=10, pady=(0, 10))
+        main_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        
+        # Configure grid for main_frame
+        main_frame.grid_rowconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(1, weight=1)  # Preview panel expands
         
         # Left panel: page list and settings
         self._build_left_panel(main_frame)
@@ -683,7 +704,7 @@ class Application(ttk.Window):
     def _build_toolbar(self) -> None:
         """Build the top toolbar with primary actions."""
         toolbar = ttk.Frame(self)
-        toolbar.pack(fill=X, padx=10, pady=10)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
         
         # Open button
         self._open_btn = ttk.Button(
@@ -738,8 +759,8 @@ class Application(ttk.Window):
     def _build_left_panel(self, parent) -> None:
         """Build the left panel with page list and settings."""
         left_frame = ttk.Frame(parent, width=320)
-        left_frame.pack(side=LEFT, fill=Y, padx=(0, 10))
-        left_frame.pack_propagate(False)
+        left_frame.grid(row=0, column=0, sticky="ns", padx=(0, 10))
+        left_frame.grid_propagate(False)  # Enforce fixed width
         
         # Page list section
         self._build_page_list(left_frame)
@@ -925,7 +946,7 @@ class Application(ttk.Window):
     def _build_preview_panel(self, parent) -> None:
         """Build the right preview panel."""
         preview_frame = ttk.Frame(parent)
-        preview_frame.pack(side=LEFT, fill=BOTH, expand=True)
+        preview_frame.grid(row=0, column=1, sticky="nsew")
         
         # Navigation bar
         nav_frame = ttk.Frame(preview_frame)
@@ -977,7 +998,7 @@ class Application(ttk.Window):
     def _build_status_bar(self) -> None:
         """Build the status bar."""
         self._status_frame = ttk.Frame(self)
-        self._status_frame.pack(fill=X, side=BOTTOM)
+        self._status_frame.grid(row=2, column=0, sticky="ew")
         
         self._status_label = ttk.Label(self._status_frame, text="Ready", font=("", 9))
         self._status_label.pack(side=LEFT)
@@ -1006,6 +1027,19 @@ class Application(ttk.Window):
         if not filepath:
             return
         
+        self._load_document(filepath)
+
+    def _on_drop(self, event) -> None:
+        """Handle file drop event."""
+        filepath = event.data
+        # Handle curly braces for paths with spaces (TkinterDnD quirk)
+        if filepath.startswith('{') and filepath.endswith('}'):
+            filepath = filepath[1:-1]
+        
+        self._load_document(filepath)
+
+    def _load_document(self, filepath: str) -> None:
+        """Load a document from the given path."""
         path = Path(filepath)
         
         try:
@@ -1494,6 +1528,13 @@ class Application(ttk.Window):
 
 def main():
     """Main entry point."""
+    # Enable High DPI awareness on Windows
+    if windll:
+        try:
+            windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
+            
     app = Application()
     app.mainloop()
 
