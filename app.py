@@ -105,6 +105,8 @@ class PreviewCanvas(tk.Canvas):
         
         # Existing redaction rectangles (canvas ids -> rect ids)
         self._redaction_overlays: dict[int, str] = {}
+        # Reverse mapping: model rect id -> canvas id (for efficient updates)
+        self._rect_id_to_canvas_id: dict[str, int] = {}
         self._handle_ids: list[int] = []
         
         # Current page redactions reference
@@ -209,20 +211,86 @@ class PreviewCanvas(tk.Canvas):
             canvas_rect = self._normalized_to_canvas(rect)
             if canvas_rect:
                 is_selected = (rect.id == self._selected_rect_id)
-                outline_color = "#0d6efd" if is_selected else "#dc3545"
-                width = 3 if is_selected else 2
+                # Use outline-only styling (no alpha colors - Tkinter doesn't support them)
+                if is_selected:
+                    outline_color = "#0d6efd"
+                    width = 3
+                    dash = (6, 3)
+                else:
+                    outline_color = "#dc3545"
+                    width = 2
+                    dash = ()
                 
-                rect_id = self.create_rectangle(
+                canvas_id = self.create_rectangle(
                     *canvas_rect,
                     outline=outline_color,
-                    fill="#dc354540" if not is_selected else "#0d6efd40",
-                    width=width
+                    fill="",  # No fill - outline only
+                    width=width,
+                    dash=dash
                 )
-                self._redaction_overlays[rect_id] = rect.id
+                self._redaction_overlays[canvas_id] = rect.id
+                self._rect_id_to_canvas_id[rect.id] = canvas_id
         
         # Draw handles for selected
         if self._selected_rect_id:
             self._draw_handles()
+    
+    def add_single_redaction(self, rect: RedactionRect) -> None:
+        """Add a single redaction overlay without clearing existing ones."""
+        if self._original_image is None:
+            return
+        canvas_rect = self._normalized_to_canvas(rect)
+        if canvas_rect:
+            canvas_id = self.create_rectangle(
+                *canvas_rect,
+                outline="#dc3545",
+                fill="",
+                width=2
+            )
+            self._redaction_overlays[canvas_id] = rect.id
+            self._rect_id_to_canvas_id[rect.id] = canvas_id
+    
+    def load_page_redactions(self, redactions: Optional[PageRedactions]) -> None:
+        """Clear all overlays and load redactions for a specific page.
+        
+        This is the proper method to call on page navigation to ensure
+        no overlays from previous pages remain visible.
+        """
+        # Always clear existing overlays first
+        self._clear_redaction_overlays()
+        # Clear selection when changing pages
+        self._selected_rect_id = None
+        self._page_redactions = redactions
+        
+        if redactions is None or self._original_image is None:
+            return
+        
+        # Draw overlays for this page
+        for rect in redactions.rectangles:
+            canvas_rect = self._normalized_to_canvas(rect)
+            if canvas_rect:
+                canvas_id = self.create_rectangle(
+                    *canvas_rect,
+                    outline="#dc3545",
+                    fill="",
+                    width=2
+                )
+                self._redaction_overlays[canvas_id] = rect.id
+                self._rect_id_to_canvas_id[rect.id] = canvas_id
+    
+    def remove_redaction(self, rect_id: str) -> bool:
+        """Remove a redaction overlay by model rect ID. Returns True if found."""
+        canvas_id = self._rect_id_to_canvas_id.get(rect_id)
+        if canvas_id is not None:
+            self.delete(canvas_id)
+            del self._redaction_overlays[canvas_id]
+            del self._rect_id_to_canvas_id[rect_id]
+            # Clear selection if this was selected
+            if self._selected_rect_id == rect_id:
+                self._selected_rect_id = None
+                self._clear_handles()
+            return True
+        return False
     
     def _draw_handles(self) -> None:
         """Draw resize handles for selected rectangle."""
@@ -261,9 +329,10 @@ class PreviewCanvas(tk.Canvas):
     
     def _clear_redaction_overlays(self) -> None:
         """Clear all redaction overlays."""
-        for rect_id in self._redaction_overlays:
-            self.delete(rect_id)
+        for canvas_id in self._redaction_overlays:
+            self.delete(canvas_id)
         self._redaction_overlays.clear()
+        self._rect_id_to_canvas_id.clear()
         self._clear_handles()
     
     def _normalized_to_canvas(self, rect: RedactionRect) -> Optional[tuple[int, int, int, int]]:
@@ -347,7 +416,10 @@ class PreviewCanvas(tk.Canvas):
     
     def _on_button_press(self, event: tk.Event) -> None:
         """Handle mouse button press."""
-        norm_x, norm_y = self._canvas_to_normalized(event.x, event.y)
+        # Use canvasx/canvasy for proper scroll support
+        cx = self.canvasx(event.x)
+        cy = self.canvasy(event.y)
+        norm_x, norm_y = self._canvas_to_normalized(cx, cy)
         
         if self._redaction_mode:
             # Check if clicking on a handle first (for resize)
@@ -358,7 +430,7 @@ class PreviewCanvas(tk.Canvas):
                     if corner:
                         self._drag_mode = "resize"
                         self._resize_corner = corner
-                        self._drag_start = (event.x, event.y)
+                        self._drag_start = (cx, cy)
                         return
             
             # Check if clicking on existing rect (for selection/move)
@@ -367,43 +439,64 @@ class PreviewCanvas(tk.Canvas):
                 if clicked_rect:
                     self._selected_rect_id = clicked_rect.id
                     self._drag_mode = "move"
-                    self._drag_start = (event.x, event.y)
-                    self.draw_redaction_overlays(self._page_redactions)
+                    self._drag_start = (cx, cy)
+                    # Update styling for selection without full redraw
+                    self._update_selection_styling()
                     return
                 else:
                     self._selected_rect_id = None
                     self._clear_handles()
             
             # Start new redaction
-            self._redaction_start = (event.x, event.y)
+            self._redaction_start = (cx, cy)
             self._current_redaction_rect = self.create_rectangle(
-                event.x, event.y, event.x, event.y,
+                cx, cy, cx, cy,
                 outline="#0d6efd",
                 width=2,
                 dash=(4, 4)
             )
         else:
-            self._drag_start = (event.x, event.y)
+            self._drag_start = (cx, cy)
             self._drag_mode = "pan"
+    
+    def _update_selection_styling(self) -> None:
+        """Update canvas item styling to reflect current selection."""
+        for canvas_id, rect_id in self._redaction_overlays.items():
+            if rect_id == self._selected_rect_id:
+                self.itemconfig(canvas_id, outline="#0d6efd", width=3, dash=(6, 3))
+            else:
+                self.itemconfig(canvas_id, outline="#dc3545", width=2, dash=())
+        if self._selected_rect_id:
+            self._draw_handles()
     
     def _on_drag(self, event: tk.Event) -> None:
         """Handle mouse drag."""
+        # Use canvasx/canvasy for proper scroll support
+        cx = self.canvasx(event.x)
+        cy = self.canvasy(event.y)
+        
         if self._drag_mode == "resize" and self._selected_rect_id and self._page_redactions:
             rect = self._page_redactions.find_by_id(self._selected_rect_id)
             if rect and self._resize_corner:
-                norm_x, norm_y = self._canvas_to_normalized(event.x, event.y)
+                norm_x, norm_y = self._canvas_to_normalized(cx, cy)
                 rect.resize_corner(self._resize_corner, norm_x, norm_y)
-                self.draw_redaction_overlays(self._page_redactions)
+                # Update canvas item directly (O(1) operation)
+                canvas_id = self._rect_id_to_canvas_id.get(self._selected_rect_id)
+                if canvas_id:
+                    new_coords = self._normalized_to_canvas(rect)
+                    if new_coords:
+                        self.coords(canvas_id, *new_coords)
+                        self._draw_handles()  # Update handle positions
                 
         elif self._drag_mode == "move" and self._selected_rect_id and self._page_redactions and self._drag_start:
             rect = self._page_redactions.find_by_id(self._selected_rect_id)
             if rect:
                 old_norm = self._canvas_to_normalized(*self._drag_start)
-                new_norm = self._canvas_to_normalized(event.x, event.y)
+                new_norm = self._canvas_to_normalized(cx, cy)
                 dx = new_norm[0] - old_norm[0]
                 dy = new_norm[1] - old_norm[1]
                 
-                # Apply move
+                # Apply move to model
                 w = rect.x1 - rect.x0
                 h = rect.y1 - rect.y0
                 rect.x0 = max(0, min(1 - w, rect.x0 + dx))
@@ -411,31 +504,42 @@ class PreviewCanvas(tk.Canvas):
                 rect.x1 = rect.x0 + w
                 rect.y1 = rect.y0 + h
                 
-                self._drag_start = (event.x, event.y)
-                self.draw_redaction_overlays(self._page_redactions)
+                self._drag_start = (cx, cy)
+                
+                # Update canvas item directly (O(1) operation)
+                canvas_id = self._rect_id_to_canvas_id.get(self._selected_rect_id)
+                if canvas_id:
+                    new_coords = self._normalized_to_canvas(rect)
+                    if new_coords:
+                        self.coords(canvas_id, *new_coords)
+                        self._draw_handles()  # Update handle positions
                 
         elif self._redaction_mode and self._redaction_start:
             if self._current_redaction_rect:
                 self.coords(
                     self._current_redaction_rect,
                     self._redaction_start[0], self._redaction_start[1],
-                    event.x, event.y
+                    cx, cy
                 )
         elif self._drag_start and self._drag_mode == "pan":
-            dx = event.x - self._drag_start[0]
-            dy = event.y - self._drag_start[1]
+            dx = cx - self._drag_start[0]
+            dy = cy - self._drag_start[1]
             self._pan_offset = (
                 self._pan_offset[0] + dx,
                 self._pan_offset[1] + dy
             )
-            self._drag_start = (event.x, event.y)
+            self._drag_start = (cx, cy)
             self._update_display()
     
     def _on_button_release(self, event: tk.Event) -> None:
         """Handle mouse button release."""
+        # Use canvasx/canvasy for proper scroll support
+        cx = self.canvasx(event.x)
+        cy = self.canvasy(event.y)
+        
         if self._drag_mode in ("move", "resize"):
-            if self._update_callback:
-                self._update_callback()
+            # Just reset state - canvas coords were already updated during drag
+            # No need for full redraw
             self._drag_mode = "pan"
             self._resize_corner = None
             self._drag_start = None
@@ -447,7 +551,7 @@ class PreviewCanvas(tk.Canvas):
                 self._current_redaction_rect = None
             
             start_norm = self._canvas_to_normalized(*self._redaction_start)
-            end_norm = self._canvas_to_normalized(event.x, event.y)
+            end_norm = self._canvas_to_normalized(cx, cy)
             
             x0 = min(start_norm[0], end_norm[0])
             y0 = min(start_norm[1], end_norm[1])
@@ -552,6 +656,9 @@ class Application(ttk.Window):
         
         # Bind close event
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        
+        # Bind keyboard shortcuts
+        self.bind("<Control-z>", lambda e: self._undo_last_redaction())
         
         logger.info("Application started")
     
@@ -847,6 +954,15 @@ class Application(ttk.Window):
         )
         self._delete_rect_btn.pack(side=RIGHT, padx=5)
         
+        # Undo button for redaction mode
+        self._undo_btn = ttk.Button(
+            nav_frame, text="↩ Undo",
+            command=self._undo_last_redaction,
+            bootstyle="secondary-outline",
+            state=DISABLED
+        )
+        self._undo_btn.pack(side=RIGHT, padx=5)
+        
         # Preview canvas
         canvas_frame = ttk.Frame(preview_frame, bootstyle="dark")
         canvas_frame.pack(fill=BOTH, expand=True)
@@ -1097,8 +1213,12 @@ class Application(ttk.Window):
         """Called when any advanced setting changes."""
         self._preview_debounce.trigger()
     
-    def _update_preview(self) -> None:
-        """Update the preview canvas with current settings."""
+    def _update_preview(self, preserve_view: bool = False) -> None:
+        """Update the preview canvas with current settings.
+        
+        Args:
+            preserve_view: If True, don't reset zoom/pan after updating.
+        """
         if self._document is None:
             return
         
@@ -1135,14 +1255,16 @@ class Application(ttk.Window):
                 preview_img = preview_img.convert("RGB")
             
             self._preview_canvas.set_image(preview_img)
-            self._preview_canvas.fit_to_window()
             
-            # Draw redaction overlays (on source image for editing)
-            if page_redactions:
-                self._preview_canvas.set_page_redactions(page_redactions)
-                self._preview_canvas.draw_redaction_overlays(page_redactions)
+            # Only fit to window if not preserving view
+            if not preserve_view:
+                self._preview_canvas.fit_to_window()
+            
+            # Always clear and reload overlays for current page (ensures no leaks)
+            self._preview_canvas.load_page_redactions(page_redactions)
             
             self._update_zoom_label()
+            self._sync_redaction_ui_state()
             
         except Exception as e:
             logger.exception("Failed to update preview")
@@ -1205,9 +1327,9 @@ class Application(ttk.Window):
         self._preview_canvas.set_redaction_mode(
             enabled, 
             self._on_redaction_drawn,
-            self._update_preview
+            None  # No update callback needed - we handle updates directly
         )
-        self._delete_rect_btn.config(state=NORMAL if enabled else DISABLED)
+        self._sync_redaction_ui_state()
     
     def _on_redaction_drawn(self, rect: RedactionRect) -> None:
         """Called when a redaction rectangle is drawn."""
@@ -1216,16 +1338,43 @@ class Application(ttk.Window):
         
         page_red = self._redactions.get_page(self._current_page)
         page_red.add_rect(rect)
-        self._update_preview()
+        # Update canvas reference to page redactions (may be new)
+        self._preview_canvas.set_page_redactions(page_red)
+        # Add overlay directly without full re-render (preserves zoom)
+        self._preview_canvas.add_single_redaction(rect)
+        self._preview_canvas.select_rect(rect.id)
+        self._sync_redaction_ui_state()
     
     def _delete_selected_rect(self) -> None:
         """Delete the currently selected redaction rectangle."""
         if self._preview_canvas._selected_rect_id and self._redactions:
             page_red = self._redactions.pages.get(self._current_page)
             if page_red:
-                page_red.remove_by_id(self._preview_canvas._selected_rect_id)
-                self._preview_canvas.deselect()
-                self._update_preview()
+                rect_id = self._preview_canvas._selected_rect_id
+                page_red.remove_by_id(rect_id)
+                self._preview_canvas.remove_redaction(rect_id)
+                self._sync_redaction_ui_state()
+    
+    def _undo_last_redaction(self) -> None:
+        """Undo the last redaction rectangle on the current page."""
+        if not self._redactions or not self._redaction_var.get():
+            return
+        page_red = self._redactions.pages.get(self._current_page)
+        if page_red and page_red.rectangles:
+            page_red.remove_last()
+            # Force full resync of canvas with model to ensure visual matches
+            self._preview_canvas.load_page_redactions(page_red)
+        self._sync_redaction_ui_state()
+    
+    def _sync_redaction_ui_state(self) -> None:
+        """Update Undo/Delete button states based on current context."""
+        in_mode = self._redaction_var.get()
+        page_red = self._redactions.pages.get(self._current_page) if self._redactions else None
+        has_rects = bool(page_red and page_red.rectangles)
+        has_selection = bool(self._preview_canvas._selected_rect_id)
+        
+        self._undo_btn.config(state=NORMAL if (in_mode and has_rects) else DISABLED)
+        self._delete_rect_btn.config(state=NORMAL if (in_mode and has_selection) else DISABLED)
     
     def _cancel_operation(self) -> None:
         """Cancel current operation (analysis or export)."""
