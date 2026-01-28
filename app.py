@@ -641,7 +641,7 @@ class Application(TkinterDnD.Tk):
         self.minsize(1024, 768)
         
         # Configure grid weights for the main window
-        self.grid_rowconfigure(1, weight=1)  # content expands
+        self.grid_rowconfigure(2, weight=1)  # content expands (row 2 now)
         self.grid_columnconfigure(0, weight=1)  # full width
         
         # Enable Drag and Drop
@@ -684,9 +684,12 @@ class Application(TkinterDnD.Tk):
         # Top toolbar (row 0)
         self._build_toolbar()
         
-        # Main content area (row 1)
+        # Navigation toolbar (row 1) - Global full-width
+        self._build_nav_toolbar()
+        
+        # Main content area (row 2)
         main_frame = ttk.Frame(self)
-        main_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        main_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
         
         # Configure grid for main_frame
         main_frame.grid_rowconfigure(0, weight=1)
@@ -698,7 +701,7 @@ class Application(TkinterDnD.Tk):
         # Right panel: preview
         self._build_preview_panel(main_frame)
         
-        # Status bar
+        # Status bar (row 3)
         self._build_status_bar()
     
     def _build_toolbar(self) -> None:
@@ -755,6 +758,44 @@ class Application(TkinterDnD.Tk):
         # File name label
         self._file_label = ttk.Label(toolbar, text="", font=("", 10, "italic"))
         self._file_label.pack(side=RIGHT, padx=10)
+
+    def _build_nav_toolbar(self) -> None:
+        """Build the global navigation toolbar (Page, Zoom, Edit)."""
+        nav_frame = ttk.Frame(self)
+        nav_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        
+        # Page Navigation (Left)
+        ttk.Button(nav_frame, text="◀", width=3, command=self._prev_page, bootstyle="secondary").pack(side=LEFT)
+        ttk.Button(nav_frame, text="▶", width=3, command=self._next_page, bootstyle="secondary").pack(side=LEFT, padx=2)
+        
+        self._page_label = ttk.Label(nav_frame, text="Page 0 / 0", font=("", 10))
+        self._page_label.pack(side=LEFT, padx=10)
+        
+        # Zoom controls (Left)
+        ttk.Separator(nav_frame, orient=VERTICAL).pack(side=LEFT, fill=Y, padx=10)
+        ttk.Button(nav_frame, text="−", width=3, command=self._zoom_out, bootstyle="secondary").pack(side=LEFT)
+        self._zoom_label = ttk.Label(nav_frame, text="100%", width=6)
+        self._zoom_label.pack(side=LEFT)
+        ttk.Button(nav_frame, text="+", width=3, command=self._zoom_in, bootstyle="secondary").pack(side=LEFT)
+        ttk.Button(nav_frame, text="Fit", command=self._fit_to_window, bootstyle="secondary-outline").pack(side=LEFT, padx=5)
+        
+        # Redaction controls (Right)
+        self._delete_rect_btn = ttk.Button(
+            nav_frame, text="🗑 Delete Selected",
+            command=self._delete_selected_rect,
+            bootstyle="danger-outline",
+            state=DISABLED
+        )
+        self._delete_rect_btn.pack(side=RIGHT, padx=5)
+        
+        # Undo button for redaction mode
+        self._undo_btn = ttk.Button(
+            nav_frame, text="↩ Undo",
+            command=self._undo_last_redaction,
+            bootstyle="secondary-outline",
+            state=DISABLED
+        )
+        self._undo_btn.pack(side=RIGHT, padx=5)
     
     def _build_left_panel(self, parent) -> None:
         """Build the left panel with page list and settings."""
@@ -948,42 +989,6 @@ class Application(TkinterDnD.Tk):
         preview_frame = ttk.Frame(parent)
         preview_frame.grid(row=0, column=1, sticky="nsew")
         
-        # Navigation bar
-        nav_frame = ttk.Frame(preview_frame)
-        nav_frame.pack(fill=X, pady=(0, 5))
-        
-        ttk.Button(nav_frame, text="◀", width=3, command=self._prev_page, bootstyle="secondary").pack(side=LEFT)
-        ttk.Button(nav_frame, text="▶", width=3, command=self._next_page, bootstyle="secondary").pack(side=LEFT, padx=2)
-        
-        self._page_label = ttk.Label(nav_frame, text="Page 0 / 0", font=("", 10))
-        self._page_label.pack(side=LEFT, padx=10)
-        
-        # Zoom controls
-        ttk.Separator(nav_frame, orient=VERTICAL).pack(side=LEFT, fill=Y, padx=10)
-        ttk.Button(nav_frame, text="−", width=3, command=self._zoom_out, bootstyle="secondary").pack(side=LEFT)
-        self._zoom_label = ttk.Label(nav_frame, text="100%", width=6)
-        self._zoom_label.pack(side=LEFT)
-        ttk.Button(nav_frame, text="+", width=3, command=self._zoom_in, bootstyle="secondary").pack(side=LEFT)
-        ttk.Button(nav_frame, text="Fit", command=self._fit_to_window, bootstyle="secondary-outline").pack(side=LEFT, padx=5)
-        
-        # Redaction controls (right side)
-        self._delete_rect_btn = ttk.Button(
-            nav_frame, text="🗑 Delete Selected",
-            command=self._delete_selected_rect,
-            bootstyle="danger-outline",
-            state=DISABLED
-        )
-        self._delete_rect_btn.pack(side=RIGHT, padx=5)
-        
-        # Undo button for redaction mode
-        self._undo_btn = ttk.Button(
-            nav_frame, text="↩ Undo",
-            command=self._undo_last_redaction,
-            bootstyle="secondary-outline",
-            state=DISABLED
-        )
-        self._undo_btn.pack(side=RIGHT, padx=5)
-        
         # Preview canvas
         canvas_frame = ttk.Frame(preview_frame, bootstyle="dark")
         canvas_frame.pack(fill=BOTH, expand=True)
@@ -998,7 +1003,7 @@ class Application(TkinterDnD.Tk):
     def _build_status_bar(self) -> None:
         """Build the status bar."""
         self._status_frame = ttk.Frame(self)
-        self._status_frame.grid(row=2, column=0, sticky="ew")
+        self._status_frame.grid(row=3, column=0, sticky="ew")
         
         self._status_label = ttk.Label(self._status_frame, text="Ready", font=("", 9))
         self._status_label.pack(side=LEFT)
