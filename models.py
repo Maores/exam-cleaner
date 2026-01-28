@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from enum import Enum
 import json
+import uuid
 from pathlib import Path
 
 
@@ -118,7 +119,7 @@ class RedactionRect:
     y0: float  # Top edge (0..1)
     x1: float  # Right edge (0..1)
     y1: float  # Bottom edge (0..1)
-    id: str = field(default_factory=lambda: str(id(object())))  # Unique ID for selection
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)  # Unique ID for selection
 
     def to_pixel_coords(self, width: int, height: int) -> tuple[int, int, int, int]:
         """Convert normalized coords to pixel coordinates for given image dimensions."""
