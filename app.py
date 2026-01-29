@@ -79,6 +79,7 @@ class PreviewCanvas(tk.Canvas):
     """
     Canvas widget for displaying PDF preview with zoom, pan, and redaction support.
     Enhanced with selection, move, resize, and nudge controls.
+    Refactored to use native scan_mark/scan_dragto for panning.
     """
     
     def __init__(self, parent, **kwargs):
@@ -89,9 +90,8 @@ class PreviewCanvas(tk.Canvas):
         self._display_image: Optional[ImageTk.PhotoImage] = None
         self._image_id: Optional[int] = None
         
-        # Zoom and pan state
+        # Zoom state
         self._zoom_level: float = 1.0
-        self._pan_offset: tuple[float, float] = (0, 0)
         self._fit_zoom: float = 1.0
         
         # Drag state
@@ -101,7 +101,8 @@ class PreviewCanvas(tk.Canvas):
         # Redaction state
         self._redaction_mode: bool = False
         self._current_redaction_rect: Optional[int] = None
-        self._redaction_start: Optional[tuple[int, int]] = None
+        self._redaction_start_pos: Optional[tuple[int, int]] = None  # Original click pos
+        self._redaction_active: bool = False  # True only after threshold passed
         self._redaction_callback: Optional[callable] = None
         self._update_callback: Optional[callable] = None
         
@@ -122,6 +123,12 @@ class PreviewCanvas(tk.Canvas):
         self.bind("<ButtonPress-1>", self._on_button_press)
         self.bind("<B1-Motion>", self._on_drag)
         self.bind("<ButtonRelease-1>", self._on_button_release)
+        
+        # Right-click pan bindings
+        self.bind("<ButtonPress-3>", self._on_right_button_press)
+        self.bind("<B3-Motion>", self._on_right_drag)
+        self.bind("<ButtonRelease-3>", self._on_right_release)
+        
         self.bind("<MouseWheel>", self._on_mouse_wheel)
         self.bind("<Configure>", self._on_resize)
         self.bind("<Delete>", self._on_delete_key)
@@ -183,11 +190,15 @@ class PreviewCanvas(tk.Canvas):
         canvas_height = self.winfo_height()
         img_width, img_height = self._original_image.size
         
+        # Calculate fit zoom
         zoom_x = canvas_width / img_width if img_width > 0 else 1
         zoom_y = canvas_height / img_height if img_height > 0 else 1
         self._fit_zoom = min(zoom_x, zoom_y, 1.0)
         self._zoom_level = self._fit_zoom
-        self._pan_offset = (0, 0)
+        
+        # Reset view
+        self.xview_moveto(0)
+        self.yview_moveto(0)
         
         self._update_display()
     
@@ -217,7 +228,6 @@ class PreviewCanvas(tk.Canvas):
             canvas_rect = self._normalized_to_canvas(rect)
             if canvas_rect:
                 is_selected = (rect.id == self._selected_rect_id)
-                # Use outline-only styling (no alpha colors - Tkinter doesn't support them)
                 if is_selected:
                     outline_color = "#0d6efd"
                     width = 3
@@ -230,9 +240,10 @@ class PreviewCanvas(tk.Canvas):
                 canvas_id = self.create_rectangle(
                     *canvas_rect,
                     outline=outline_color,
-                    fill="",  # No fill - outline only
+                    fill="",
                     width=width,
-                    dash=dash
+                    dash=dash,
+                    tags=("redaction", "overlay")
                 )
                 self._redaction_overlays[canvas_id] = rect.id
                 self._rect_id_to_canvas_id[rect.id] = canvas_id
@@ -251,27 +262,21 @@ class PreviewCanvas(tk.Canvas):
                 *canvas_rect,
                 outline="#dc3545",
                 fill="",
-                width=2
+                width=2,
+                tags=("redaction", "overlay")
             )
             self._redaction_overlays[canvas_id] = rect.id
             self._rect_id_to_canvas_id[rect.id] = canvas_id
     
     def load_page_redactions(self, redactions: Optional[PageRedactions]) -> None:
-        """Clear all overlays and load redactions for a specific page.
-        
-        This is the proper method to call on page navigation to ensure
-        no overlays from previous pages remain visible.
-        """
-        # Always clear existing overlays first
+        """Clear all overlays and load redactions."""
         self._clear_redaction_overlays()
-        # Clear selection when changing pages
         self._selected_rect_id = None
         self._page_redactions = redactions
         
         if redactions is None or self._original_image is None:
             return
         
-        # Draw overlays for this page
         for rect in redactions.rectangles:
             canvas_rect = self._normalized_to_canvas(rect)
             if canvas_rect:
@@ -279,7 +284,8 @@ class PreviewCanvas(tk.Canvas):
                     *canvas_rect,
                     outline="#dc3545",
                     fill="",
-                    width=2
+                    width=2,
+                    tags=("redaction", "overlay")
                 )
                 self._redaction_overlays[canvas_id] = rect.id
                 self._rect_id_to_canvas_id[rect.id] = canvas_id
@@ -291,7 +297,6 @@ class PreviewCanvas(tk.Canvas):
             self.delete(canvas_id)
             del self._redaction_overlays[canvas_id]
             del self._rect_id_to_canvas_id[rect_id]
-            # Clear selection if this was selected
             if self._selected_rect_id == rect_id:
                 self._selected_rect_id = None
                 self._clear_handles()
@@ -323,7 +328,8 @@ class PreviewCanvas(tk.Canvas):
                 cx + handle_size//2, cy + handle_size//2,
                 fill="#0d6efd",
                 outline="white",
-                width=1
+                width=1,
+                tags=("handle", "overlay")
             )
             self._handle_ids.append(handle)
     
@@ -341,32 +347,48 @@ class PreviewCanvas(tk.Canvas):
         self._rect_id_to_canvas_id.clear()
         self._clear_handles()
     
+    def _get_image_offset(self) -> tuple[int, int]:
+        """Get the canvas origin (top-left) for shifting content."""
+        if self._display_image is None:
+            return 0, 0
+        
+        # Center the image in the scrollable area if it's smaller than the window
+        # But we must respect the scrollregion.
+        # Simple strategy: Always draw at (0,0) or (Margin, Margin).
+        # Tkinter canvas allows negative coordinates, but scrollregion defines the limits.
+        
+        # Strategy:
+        # 1. Image is always at (0, 0) relative to the scrollable canvas.
+        # 2. If Window > Image, we center the view? No, we center the CONTENT in the window.
+        #    This is done by offsetting the image placement.
+        
+        win_w = self.winfo_width()
+        win_h = self.winfo_height()
+        img_w = self._display_image.width()
+        img_h = self._display_image.height()
+        
+        pad_x = max(0, (win_w - img_w) // 2)
+        pad_y = max(0, (win_h - img_h) // 2)
+        
+        return pad_x, pad_y
+
     def _normalized_to_canvas(self, rect: RedactionRect) -> Optional[tuple[int, int, int, int]]:
         """Convert normalized coordinates to canvas coordinates."""
         if self._original_image is None:
             return None
         
         img_w, img_h = self._original_image.size
+        # Use full floats for precision before int cast
+        scale = self._zoom_level
         
-        x0 = rect.x0 * img_w * self._zoom_level
-        y0 = rect.y0 * img_h * self._zoom_level
-        x1 = rect.x1 * img_w * self._zoom_level
-        y1 = rect.y1 * img_h * self._zoom_level
+        pad_x, pad_y = self._get_image_offset()
         
-        canvas_w = self.winfo_width()
-        canvas_h = self.winfo_height()
-        display_w = img_w * self._zoom_level
-        display_h = img_h * self._zoom_level
+        x0 = rect.x0 * img_w * scale + pad_x
+        y0 = rect.y0 * img_h * scale + pad_y
+        x1 = rect.x1 * img_w * scale + pad_x
+        y1 = rect.y1 * img_h * scale + pad_y
         
-        offset_x = (canvas_w - display_w) / 2 + self._pan_offset[0]
-        offset_y = (canvas_h - display_h) / 2 + self._pan_offset[1]
-        
-        return (
-            int(x0 + offset_x),
-            int(y0 + offset_y),
-            int(x1 + offset_x),
-            int(y1 + offset_y)
-        )
+        return (int(x0), int(y0), int(x1), int(y1))
     
     def _canvas_to_normalized(self, x: int, y: int) -> tuple[float, float]:
         """Convert canvas coordinates to normalized image coordinates."""
@@ -374,24 +396,29 @@ class PreviewCanvas(tk.Canvas):
             return (0, 0)
         
         img_w, img_h = self._original_image.size
-        canvas_w = self.winfo_width()
-        canvas_h = self.winfo_height()
-        display_w = img_w * self._zoom_level
-        display_h = img_h * self._zoom_level
+        scale = self._zoom_level
         
-        offset_x = (canvas_w - display_w) / 2 + self._pan_offset[0]
-        offset_y = (canvas_h - display_h) / 2 + self._pan_offset[1]
+        pad_x, pad_y = self._get_image_offset()
         
-        img_x = (x - offset_x) / self._zoom_level
-        img_y = (y - offset_y) / self._zoom_level
+        # Remove padding
+        rel_x = x - pad_x
+        rel_y = y - pad_y
         
-        norm_x = max(0, min(1, img_x / img_w))
-        norm_y = max(0, min(1, img_y / img_h))
+        img_x = rel_x / scale
+        img_y = rel_y / scale
         
+        norm_x = img_x / img_w
+        norm_y = img_y / img_h
+        
+        # No clamp - allow detection of out-of-bounds
         return (norm_x, norm_y)
+
+    def _is_on_page(self, norm_x: float, norm_y: float) -> bool:
+        """Check if normalized coordinates are within the page bounds."""
+        return 0 <= norm_x <= 1 and 0 <= norm_y <= 1
     
     def _update_display(self) -> None:
-        """Update the displayed image based on current zoom and pan."""
+        """Update the displayed image based on current zoom."""
         if self._original_image is None:
             return
         
@@ -400,7 +427,7 @@ class PreviewCanvas(tk.Canvas):
         
         if new_width < 1 or new_height < 1:
             return
-        
+            
         resized = self._original_image.resize(
             (new_width, new_height),
             Image.Resampling.LANCZOS
@@ -408,28 +435,51 @@ class PreviewCanvas(tk.Canvas):
         
         self._display_image = ImageTk.PhotoImage(resized)
         
-        canvas_width = self.winfo_width()
-        canvas_height = self.winfo_height()
-        
-        x = canvas_width // 2 + self._pan_offset[0]
-        y = canvas_height // 2 + self._pan_offset[1]
+        # Determine position (centered if smaller than window)
+        pad_x, pad_y = self._get_image_offset()
         
         if self._image_id:
-            self.coords(self._image_id, x, y)
+            self.coords(self._image_id, pad_x, pad_y)
             self.itemconfig(self._image_id, image=self._display_image)
         else:
-            self._image_id = self.create_image(x, y, image=self._display_image, anchor="center")
+            self._image_id = self.create_image(
+                pad_x, pad_y, 
+                image=self._display_image, 
+                anchor="nw",
+                tags="page_image"
+            )
+            
+        # IMPORTANT: Update scrollregion so scan_dragto works properly
+        # Make the scrollregion at least the window size, or the image size + padding
+        win_w = self.winfo_width()
+        win_h = self.winfo_height()
+        req_w = max(win_w, pad_x + new_width)
+        req_h = max(win_h, pad_y + new_height)
+        
+        self.config(scrollregion=(0, 0, req_w, req_h))
     
     def _on_button_press(self, event: tk.Event) -> None:
         """Handle mouse button press."""
-        # Use canvasx/canvasy for proper scroll support
+        # Translate window coords (event.x) to canvas coords (canvasx)
         cx = self.canvasx(event.x)
         cy = self.canvasy(event.y)
+        
         norm_x, norm_y = self._canvas_to_normalized(cx, cy)
         
+        # Identify what was clicked using tags/overlap
+        # We use a small rectangle for hit testing to be robust
+        hit_items = self.find_overlapping(cx-2, cy-2, cx+2, cy+2)
+        tags = set()
+        for item in hit_items:
+            tags.update(self.gettags(item))
+            
+        is_handle_hit = "handle" in tags
+        is_redaction_hit = "redaction" in tags
+        is_page_hit = "page_image" in tags
+        
         if self._redaction_mode:
-            # Check if clicking on a handle first (for resize)
-            if self._selected_rect_id and self._page_redactions:
+            # 1. Resize (via Handle)
+            if self._selected_rect_id and self._page_redactions and is_handle_hit:
                 rect = self._page_redactions.find_by_id(self._selected_rect_id)
                 if rect:
                     corner = rect.get_corner_at(norm_x, norm_y, tolerance=0.03)
@@ -439,31 +489,37 @@ class PreviewCanvas(tk.Canvas):
                         self._drag_start = (cx, cy)
                         return
             
-            # Check if clicking on existing rect (for selection/move)
-            if self._page_redactions:
-                clicked_rect = self._page_redactions.find_at_point(norm_x, norm_y)
+            # 2. Select / Move (via Existing Rect)
+            # Prioritize selecting a rect if we clicked one
+            if is_redaction_hit:
+                clicked_rect = self._page_redactions.find_at_point(norm_x, norm_y) if self._page_redactions else None
                 if clicked_rect:
                     self._selected_rect_id = clicked_rect.id
                     self._drag_mode = "move"
                     self._drag_start = (cx, cy)
-                    # Update styling for selection without full redraw
                     self._update_selection_styling()
                     return
-                else:
+            
+            # 3. Create New Redaction (Drawing)
+            # Only if we are strictly on the page and NOT on a handle/rect (handled above)
+            if is_page_hit and self._is_on_page(norm_x, norm_y):
+                self._drag_mode = "redact"
+                self._redaction_start_pos = (cx, cy)
+                self._redaction_active = False
+                self._current_redaction_rect = None
+                
+                # Deselect if clicking on empty page space
+                if self._selected_rect_id:
                     self._selected_rect_id = None
                     self._clear_handles()
-            
-            # Start new redaction
-            self._redaction_start = (cx, cy)
-            self._current_redaction_rect = self.create_rectangle(
-                cx, cy, cx, cy,
-                outline="#0d6efd",
-                width=2,
-                dash=(4, 4)
-            )
-        else:
-            self._drag_start = (cx, cy)
-            self._drag_mode = "pan"
+                    self._update_selection_styling() # To refresh previous selection
+                return
+        
+        # Default: Pan
+        # (If we clicked background, or neutral mode, or failed other checks)
+        self._drag_mode = "pan"
+        self.scan_mark(event.x, event.y)
+        self.config(cursor="fleur")  # Visual feedback for pan
     
     def _update_selection_styling(self) -> None:
         """Update canvas item styling to reflect current selection."""
@@ -477,22 +533,41 @@ class PreviewCanvas(tk.Canvas):
     
     def _on_drag(self, event: tk.Event) -> None:
         """Handle mouse drag."""
-        # Use canvasx/canvasy for proper scroll support
         cx = self.canvasx(event.x)
         cy = self.canvasy(event.y)
         
-        if self._drag_mode == "resize" and self._selected_rect_id and self._page_redactions:
+        if self._drag_mode == "pan":
+            self.scan_dragto(event.x, event.y, gain=1)
+            return
+
+        if self._drag_mode == "redact" and self._redaction_start_pos:
+            start_x, start_y = self._redaction_start_pos
+            
+            # Check threshold
+            if not self._redaction_active:
+                dist = ((cx - start_x)**2 + (cy - start_y)**2)**0.5
+                if dist > 5:
+                    self._redaction_active = True
+                    self._current_redaction_rect = self.create_rectangle(
+                        start_x, start_y, cx, cy,
+                        outline="#0d6efd", width=2, dash=(4, 4),
+                        tags="temp_rect"
+                    )
+            
+            if self._redaction_active and self._current_redaction_rect:
+                self.coords(self._current_redaction_rect, start_x, start_y, cx, cy)
+                
+        elif self._drag_mode == "resize" and self._selected_rect_id and self._page_redactions:
             rect = self._page_redactions.find_by_id(self._selected_rect_id)
             if rect and self._resize_corner:
                 norm_x, norm_y = self._canvas_to_normalized(cx, cy)
                 rect.resize_corner(self._resize_corner, norm_x, norm_y)
-                # Update canvas item directly (O(1) operation)
                 canvas_id = self._rect_id_to_canvas_id.get(self._selected_rect_id)
                 if canvas_id:
                     new_coords = self._normalized_to_canvas(rect)
                     if new_coords:
                         self.coords(canvas_id, *new_coords)
-                        self._draw_handles()  # Update handle positions
+                        self._draw_handles()
                 
         elif self._drag_mode == "move" and self._selected_rect_id and self._page_redactions and self._drag_start:
             rect = self._page_redactions.find_by_id(self._selected_rect_id)
@@ -502,7 +577,6 @@ class PreviewCanvas(tk.Canvas):
                 dx = new_norm[0] - old_norm[0]
                 dy = new_norm[1] - old_norm[1]
                 
-                # Apply move to model
                 w = rect.x1 - rect.x0
                 h = rect.y1 - rect.y0
                 rect.x0 = max(0, min(1 - w, rect.x0 + dx))
@@ -512,66 +586,63 @@ class PreviewCanvas(tk.Canvas):
                 
                 self._drag_start = (cx, cy)
                 
-                # Update canvas item directly (O(1) operation)
                 canvas_id = self._rect_id_to_canvas_id.get(self._selected_rect_id)
                 if canvas_id:
                     new_coords = self._normalized_to_canvas(rect)
                     if new_coords:
                         self.coords(canvas_id, *new_coords)
-                        self._draw_handles()  # Update handle positions
-                
-        elif self._redaction_mode and self._redaction_start:
-            if self._current_redaction_rect:
-                self.coords(
-                    self._current_redaction_rect,
-                    self._redaction_start[0], self._redaction_start[1],
-                    cx, cy
-                )
-        elif self._drag_start and self._drag_mode == "pan":
-            dx = cx - self._drag_start[0]
-            dy = cy - self._drag_start[1]
-            self._pan_offset = (
-                self._pan_offset[0] + dx,
-                self._pan_offset[1] + dy
-            )
-            self._drag_start = (cx, cy)
-            self._update_display()
+                        self._draw_handles()
     
     def _on_button_release(self, event: tk.Event) -> None:
         """Handle mouse button release."""
-        # Use canvasx/canvasy for proper scroll support
         cx = self.canvasx(event.x)
         cy = self.canvasy(event.y)
         
-        if self._drag_mode in ("move", "resize"):
-            # Just reset state - canvas coords were already updated during drag
-            # No need for full redraw
-            self._drag_mode = "pan"
-            self._resize_corner = None
-            self._drag_start = None
-            return
+        # Reset cursor if we were panning
+        if self._drag_mode == "pan":
+             self.config(cursor="crosshair" if self._redaction_mode else "")
         
-        if self._redaction_mode and self._redaction_start:
+        if self._drag_mode == "redact":
             if self._current_redaction_rect:
                 self.delete(self._current_redaction_rect)
                 self._current_redaction_rect = None
             
-            start_norm = self._canvas_to_normalized(*self._redaction_start)
-            end_norm = self._canvas_to_normalized(cx, cy)
-            
-            x0 = min(start_norm[0], end_norm[0])
-            y0 = min(start_norm[1], end_norm[1])
-            x1 = max(start_norm[0], end_norm[0])
-            y1 = max(start_norm[1], end_norm[1])
-            
-            if abs(x1 - x0) > 0.01 and abs(y1 - y0) > 0.01:
-                rect = RedactionRect(x0, y0, x1, y1)
-                if self._redaction_callback:
-                    self._redaction_callback(rect)
-            
-            self._redaction_start = None
-        else:
-            self._drag_start = None
+            if self._redaction_active and self._redaction_start_pos:
+                start_norm = self._canvas_to_normalized(*self._redaction_start_pos)
+                end_norm = self._canvas_to_normalized(cx, cy)
+                
+                x0 = max(0, min(1, min(start_norm[0], end_norm[0])))
+                y0 = max(0, min(1, min(start_norm[1], end_norm[1])))
+                x1 = max(0, min(1, max(start_norm[0], end_norm[0])))
+                y1 = max(0, min(1, max(start_norm[1], end_norm[1])))
+                
+                if abs(x1 - x0) > 0.01 and abs(y1 - y0) > 0.01:
+                    rect = RedactionRect(x0, y0, x1, y1)
+                    if self._redaction_callback:
+                        self._redaction_callback(rect)
+
+        self._drag_mode = "pan"
+        self._resize_corner = None
+        self._drag_start = None
+        self._redaction_start_pos = None
+        self._redaction_active = False
+
+    def _on_right_button_press(self, event: tk.Event) -> None:
+        """Handle right mouse button press for unconditional panning."""
+        self._drag_mode = "pan_right"
+        self.scan_mark(event.x, event.y)
+        self.config(cursor="fleur")
+
+    def _on_right_drag(self, event: tk.Event) -> None:
+        """Handle right mouse drag."""
+        if self._drag_mode == "pan_right":
+            self.scan_dragto(event.x, event.y, gain=1)
+    
+    def _on_right_release(self, event: tk.Event) -> None:
+        """Handle right mouse button release."""
+        self._drag_mode = "pan"  # Reset
+        # Restore cursor based on mode
+        self.config(cursor="crosshair" if self._redaction_mode else "")
     
     def _on_mouse_wheel(self, event: tk.Event) -> None:
         """Handle mouse wheel for zooming."""
