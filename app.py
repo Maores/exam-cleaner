@@ -201,16 +201,22 @@ class PreviewCanvas(tk.Canvas):
         self.yview_moveto(0)
         
         self._update_display()
+        if self._page_redactions:
+            self.draw_redaction_overlays(self._page_redactions)
     
     def zoom_in(self) -> None:
         """Zoom in by 25%."""
         self._zoom_level = min(self._zoom_level * 1.25, 5.0)
         self._update_display()
+        if self._page_redactions:
+            self.draw_redaction_overlays(self._page_redactions)
     
     def zoom_out(self) -> None:
         """Zoom out by 25%."""
         self._zoom_level = max(self._zoom_level / 1.25, 0.1)
         self._update_display()
+        if self._page_redactions:
+            self.draw_redaction_overlays(self._page_redactions)
     
     def get_zoom_level(self) -> float:
         """Get current zoom level."""
