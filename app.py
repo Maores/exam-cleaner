@@ -495,19 +495,26 @@ class PreviewCanvas(tk.Canvas):
                         self._drag_start = (cx, cy)
                         return
             
-            # 2. Select / Move (via Existing Rect)
-            # Prioritize selecting a rect if we clicked one
-            if is_redaction_hit:
-                clicked_rect = self._page_redactions.find_at_point(norm_x, norm_y) if self._page_redactions else None
-                if clicked_rect:
-                    self._selected_rect_id = clicked_rect.id
-                    self._drag_mode = "move"
-                    self._drag_start = (cx, cy)
-                    self._update_selection_styling()
-                    return
+            # 2. Select / Move (via Existing Rect) - Bounding-box based detection
+            # Check if click is inside any redaction rectangle's bounding box
+            clicked_rect_id = None
+            for canvas_id, rect_id in self._redaction_overlays.items():
+                coords = self.coords(canvas_id)  # Returns [x0, y0, x1, y1]
+                if len(coords) == 4:
+                    x0, y0, x1, y1 = coords
+                    if x0 <= cx <= x1 and y0 <= cy <= y1:
+                        clicked_rect_id = rect_id
+                        break
+            
+            if clicked_rect_id and self._page_redactions:
+                self._selected_rect_id = clicked_rect_id
+                self._drag_mode = "move"
+                self._drag_start = (cx, cy)
+                self._update_selection_styling()
+                return
             
             # 3. Create New Redaction (Drawing)
-            # Only if we are strictly on the page and NOT on a handle/rect (handled above)
+            # Only start drawing on empty page area (bounding-box check above handles rect hits)
             if is_page_hit and self._is_on_page(norm_x, norm_y):
                 self._drag_mode = "redact"
                 self._redaction_start_pos = (cx, cy)
