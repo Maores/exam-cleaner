@@ -2,7 +2,7 @@
 Exam Cleaner - Desktop Application
 Modern Tkinter GUI with ttkbootstrap for converting exam PDFs to study-safe B/W PDFs.
 
-Workflow: Open PDF → Analyze → Review flagged pages → Export
+Workflow: Open PDF → Auto Clean → (Optional) Redaction → Export
 """
 
 import tkinter as tk
@@ -26,10 +26,10 @@ except ImportError:
 from models import (
     Settings, ProcessingMode, AutoThresholdMethod, OutputFormat,
     DocumentRedactions, PageRedactions, RedactionRect, ExportProgress,
-    StrengthPreset, OutputPreset, AnalysisResult, AnalysisConfidence
+    StrengthPreset, OutputPreset
 )
 from processor import (
-    PDFDocument, ImageProcessor, PDFExporter, PreviewCache, PageAnalyzer,
+    PDFDocument, ImageProcessor, PDFExporter, PreviewCache,
     check_output_writable, generate_default_output_path
 )
 
@@ -511,6 +511,8 @@ class PreviewCanvas(tk.Canvas):
                 self._drag_mode = "move"
                 self._drag_start = (cx, cy)
                 self._update_selection_styling()
+                if self._update_callback:
+                    self._update_callback()
                 return
             
             # 3. Create New Redaction (Drawing)
@@ -721,7 +723,7 @@ class Application(TkinterDnD.Tk):
         
         self.title("Exam Cleaner")
         # Increased default size and set minimum size
-        self.geometry("1280x850")
+        self.geometry("1300x1125")
         self.minsize(1024, 768)
         
         # Configure grid weights for the main window
@@ -740,10 +742,6 @@ class Application(TkinterDnD.Tk):
         self._redactions: Optional[DocumentRedactions] = None
         self._exporter: Optional[PDFExporter] = None
         self._export_thread: Optional[threading.Thread] = None
-        self._analyzer: Optional[PageAnalyzer] = None
-        self._analysis_thread: Optional[threading.Thread] = None
-        self._analysis_results: list[AnalysisResult] = []
-        self._show_all_pages: bool = False
         
         # Debounce timer for preview updates
         self._preview_debounce = DebounceTimer(self, DEBOUNCE_DELAY_MS, self._update_preview)
@@ -800,15 +798,6 @@ class Application(TkinterDnD.Tk):
             command=self._open_file
         )
         self._open_btn.pack(side=LEFT, padx=(0, 5))
-        
-        # Analyze button
-        self._analyze_btn = ttk.Button(
-            toolbar, text="🔍 Analyze",
-            bootstyle="info",
-            command=self._start_analysis,
-            state=DISABLED
-        )
-        self._analyze_btn.pack(side=LEFT, padx=5)
         
         # Export button
         self._export_btn = ttk.Button(
@@ -894,8 +883,8 @@ class Application(TkinterDnD.Tk):
         self._build_settings_panel(left_frame)
     
     def _build_page_list(self, parent) -> None:
-        """Build the page review list."""
-        list_frame = ttk.LabelFrame(parent, text="Pages to Review")
+        """Build the page list."""
+        list_frame = ttk.LabelFrame(parent, text="Document Pages")
         list_frame.pack(fill=BOTH, expand=True, pady=(0, 10))
         
         # Empty state label
@@ -906,17 +895,6 @@ class Application(TkinterDnD.Tk):
             foreground="gray"
         )
         self._empty_label.pack(expand=True)
-        
-        # Show all pages toggle
-        toggle_frame = ttk.Frame(list_frame)
-        self._show_all_var = tk.BooleanVar(value=False)
-        self._show_all_check = ttk.Checkbutton(
-            toggle_frame,
-            text="Show all pages",
-            variable=self._show_all_var,
-            command=self._refresh_page_list,
-            bootstyle="secondary-round-toggle"
-        )
         
         # Page listbox with scrollbar
         self._page_list_frame = ttk.Frame(list_frame)
@@ -936,15 +914,6 @@ class Application(TkinterDnD.Tk):
         
         self._page_listbox.pack(side=LEFT, fill=BOTH, expand=True)
         scrollbar.pack(side=RIGHT, fill=Y)
-        
-        # Analysis progress (hidden initially)
-        self._analysis_progress_frame = ttk.Frame(list_frame)
-        self._analysis_progress = ttk.Progressbar(
-            self._analysis_progress_frame,
-            mode="determinate",
-            bootstyle="info-striped"
-        )
-        self._analysis_label = ttk.Label(self._analysis_progress_frame, text="Analyzing...")
     
     def _build_settings_panel(self, parent) -> None:
         """Build the settings panel with presets and advanced options."""
@@ -1140,15 +1109,12 @@ class Application(TkinterDnD.Tk):
             
             self._preview_cache = PreviewCache(self._document, self._settings)
             self._redactions = DocumentRedactions(file_path=str(path))
-            self._analyzer = PageAnalyzer(self._document)
-            self._analysis_results = []
             self._raw_preview_cache.clear()
             
             self._current_page = 0
             
             # Update UI
             self._file_label.config(text=path.name)
-            self._analyze_btn.config(state=NORMAL)
             self._export_btn.config(state=NORMAL)
             self._update_page_label()
             self._refresh_page_list()
@@ -1161,109 +1127,23 @@ class Application(TkinterDnD.Tk):
             logger.exception(f"Failed to open file: {path}")
             messagebox.showerror("Error", f"Failed to open file:\n{str(e)}")
     
-    def _start_analysis(self) -> None:
-        """Start page analysis in background thread."""
-        if not self._document or not self._analyzer:
-            return
-        
-        # Show progress UI
-        self._analyze_btn.config(state=DISABLED)
-        self._cancel_btn.pack(side=LEFT, padx=5)
-        
-        self._empty_label.pack_forget()
-        self._page_list_frame.pack_forget()
-        self._analysis_progress_frame.pack(fill=X, pady=10)
-        self._analysis_progress.pack(fill=X)
-        self._analysis_label.pack(pady=5)
-        
-        self._set_status("Analyzing pages...")
-        
-        # Clear previous results
-        self._analyzer.clear_results()
-        self._analysis_results = []
-        
-        # Start analysis thread
-        self._analysis_thread = threading.Thread(target=self._run_analysis, daemon=True)
-        self._analysis_thread.start()
-    
-    def _run_analysis(self) -> None:
-        """Run analysis in background thread."""
-        def progress_callback(current: int, total: int):
-            self.after(0, lambda: self._update_analysis_progress(current, total))
-        
-        try:
-            results = self._analyzer.analyze_all(progress_callback)
-            self.after(0, lambda: self._on_analysis_complete(results))
-        except Exception as e:
-            logger.exception("Analysis failed")
-            self.after(0, lambda: self._on_analysis_complete([], str(e)))
-    
-    def _update_analysis_progress(self, current: int, total: int) -> None:
-        """Update analysis progress UI."""
-        progress = (current / total) * 100 if total > 0 else 0
-        self._analysis_progress.config(value=progress)
-        self._analysis_label.config(text=f"Analyzing page {current} / {total}...")
-    
-    def _on_analysis_complete(self, results: list[AnalysisResult], error: str = None) -> None:
-        """Handle analysis completion."""
-        # Hide progress UI
-        self._analysis_progress_frame.pack_forget()
-        self._cancel_btn.pack_forget()
-        self._analyze_btn.config(state=NORMAL)
-        
-        if error:
-            messagebox.showerror("Analysis Error", f"Analysis failed:\n{error}")
-            self._set_status("Analysis failed")
-            return
-        
-        self._analysis_results = results
-        flagged = [r for r in results if r.is_flagged]
-        
-        self._set_status(f"Analysis complete: {len(flagged)} pages flagged for review")
-        self._refresh_page_list()
-    
     def _refresh_page_list(self) -> None:
-        """Refresh the page list based on analysis results."""
+        """Refresh the page list."""
         if not self._document:
             self._empty_label.config(text="📄 Open a PDF to begin")
             self._empty_label.pack(expand=True)
             self._page_list_frame.pack_forget()
             return
         
-        # Check if we have analysis results
-        if not self._analysis_results:
-            self._empty_label.config(text="🔍 Click Analyze to find marked pages")
-            self._empty_label.pack(expand=True)
-            self._page_list_frame.pack_forget()
-            self._show_all_check.pack_forget()
-            return
-        
         self._empty_label.pack_forget()
-        self._show_all_check.pack(anchor=W, pady=(0, 5))
-        self._show_all_check.master.pack(fill=X, pady=(0, 5))
         self._page_list_frame.pack(fill=BOTH, expand=True)
         
         # Clear listbox
         self._page_listbox.delete(0, tk.END)
         
-        show_all = self._show_all_var.get()
-        
-        for result in self._analysis_results:
-            if show_all or result.is_flagged:
-                # Format entry
-                page_num = result.page_number + 1
-                if result.confidence == AnalysisConfidence.LIKELY_MARKED:
-                    prefix = "🔴"
-                    suffix = " (Likely marked)"
-                elif result.confidence == AnalysisConfidence.MAYBE_MARKED:
-                    prefix = "🟡"
-                    suffix = " (Maybe marked)"
-                else:
-                    prefix = "⚪"
-                    suffix = ""
-                
-                entry = f"{prefix} Page {page_num}{suffix}"
-                self._page_listbox.insert(tk.END, entry)
+        for i in range(self._document.page_count):
+            entry = f"Page {i + 1}"
+            self._page_listbox.insert(tk.END, entry)
     
     def _on_page_select(self, event) -> None:
         """Handle page selection from list."""
@@ -1273,14 +1153,8 @@ class Application(TkinterDnD.Tk):
         
         # Map listbox index to actual page
         idx = selection[0]
-        show_all = self._show_all_var.get()
-        
-        if show_all:
+        if idx < self._document.page_count:
             self._current_page = idx
-        else:
-            flagged = [r for r in self._analysis_results if r.is_flagged]
-            if idx < len(flagged):
-                self._current_page = flagged[idx].page_number
         
         self._update_page_label()
         self._update_preview()
@@ -1450,7 +1324,7 @@ class Application(TkinterDnD.Tk):
         self._preview_canvas.set_redaction_mode(
             enabled, 
             self._on_redaction_drawn,
-            None  # No update callback needed - we handle updates directly
+            self._sync_redaction_ui_state  # Callback to update button states on selection change
         )
         self._sync_redaction_ui_state()
     
@@ -1476,6 +1350,8 @@ class Application(TkinterDnD.Tk):
                 rect_id = self._preview_canvas._selected_rect_id
                 page_red.remove_by_id(rect_id)
                 self._preview_canvas.remove_redaction(rect_id)
+                # Update visual styling to reflect cleared selection
+                self._preview_canvas._update_selection_styling()
                 self._sync_redaction_ui_state()
     
     def _undo_last_redaction(self) -> None:
@@ -1500,9 +1376,7 @@ class Application(TkinterDnD.Tk):
         self._delete_rect_btn.config(state=NORMAL if (in_mode and has_selection) else DISABLED)
     
     def _cancel_operation(self) -> None:
-        """Cancel current operation (analysis or export)."""
-        if self._analyzer:
-            self._analyzer.cancel()
+        """Cancel current operation (export)."""
         if self._exporter:
             self._exporter.cancel()
     
@@ -1594,10 +1468,11 @@ class Application(TkinterDnD.Tk):
     
     def _on_close(self) -> None:
         """Handle application close."""
+        # Print current window size for user reference
+        print(f"Window geometry on close: {self.winfo_width()}x{self.winfo_height()}")
+        
         self._preview_debounce.cancel()
         
-        if self._analyzer:
-            self._analyzer.cancel()
         if self._exporter:
             self._exporter.cancel()
         
