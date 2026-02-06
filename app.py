@@ -246,7 +246,7 @@ class PreviewCanvas(tk.Canvas):
                 canvas_id = self.create_rectangle(
                     *canvas_rect,
                     outline=outline_color,
-                    fill="",
+                    fill="white",
                     width=width,
                     dash=dash,
                     tags=("redaction", "overlay")
@@ -267,7 +267,7 @@ class PreviewCanvas(tk.Canvas):
             canvas_id = self.create_rectangle(
                 *canvas_rect,
                 outline="#dc3545",
-                fill="",
+                fill="white",
                 width=2,
                 tags=("redaction", "overlay")
             )
@@ -289,7 +289,7 @@ class PreviewCanvas(tk.Canvas):
                 canvas_id = self.create_rectangle(
                     *canvas_rect,
                     outline="#dc3545",
-                    fill="",
+                    fill="white",
                     width=2,
                     tags=("redaction", "overlay")
                 )
@@ -730,7 +730,7 @@ class Application(TkinterDnD.Tk):
         
         # Configure main window
         self.title("Exam Cleaner")
-        self.geometry("1300x1125")
+        self.geometry("1325x1125")
         self.minsize(1024, 768)
         self.configure(bg=self.BG_COLOR)
         
@@ -1024,7 +1024,7 @@ class Application(TkinterDnD.Tk):
         # Empty state label
         self._empty_label = ttk.Label(
             list_frame,
-            text="📄 Open a PDF to begin",
+            text="📄 Open or drag a PDF to begin",
             font=("", 11),
             foreground="#94A3B8",
             background=self.CARD_BG
