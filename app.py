@@ -716,19 +716,30 @@ class PreviewCanvas(tk.Canvas):
 class Application(TkinterDnD.Tk):
     """Main application window with modern ttkbootstrap theme."""
     
+    # Modern Dashboard Color Palette
+    BG_COLOR = "#F8FAFC"           # Very light gray background
+    CARD_BG = "#FFFFFF"            # White card background
+    ACCENT_COLOR = "#2563EB"       # Academic Blue
+    PREVIEW_BG = "#334155"         # Dark slate gray for preview
+    BORDER_SUBTLE = "#E2E8F0"      # Subtle borders
+    
     def __init__(self):
         super().__init__()
         self.style = tb.Style()
-        self.style.theme_use("flatly")
+        self.style.theme_use("litera")  # Clean, academic-modern theme
         
+        # Configure main window
         self.title("Exam Cleaner")
-        # Increased default size and set minimum size
         self.geometry("1300x1125")
         self.minsize(1024, 768)
+        self.configure(bg=self.BG_COLOR)
+        
+        # Configure custom styles for Modern Dashboard
+        self._configure_custom_styles()
         
         # Configure grid weights for the main window
-        self.grid_rowconfigure(2, weight=1)  # content expands (row 2 now)
-        self.grid_columnconfigure(0, weight=1)  # full width
+        self.grid_rowconfigure(1, weight=1)  # Main content expands
+        self.grid_columnconfigure(0, weight=1)  # Full width
         
         # Enable Drag and Drop
         self.drop_target_register(DND_FILES)
@@ -761,30 +772,145 @@ class Application(TkinterDnD.Tk):
         
         logger.info("Application started")
     
+    def _configure_custom_styles(self) -> None:
+        """Configure custom ttk styles for Modern Dashboard look."""
+        style = self.style
+        
+        # Card frame style (white background with subtle border simulation)
+        style.configure("Card.TFrame", background=self.CARD_BG)
+        
+        # Header frame style
+        style.configure("Header.TFrame", background=self.CARD_BG)
+        
+        # Section header labels
+        style.configure(
+            "SectionHeader.TLabel",
+            font=("", 10, "bold"),
+            background=self.CARD_BG
+        )
+        
+        # Primary action button (solid blue)
+        style.configure(
+            "Primary.TButton",
+            font=("", 10, "bold")
+        )
+        
+        # Status badge style
+        style.configure(
+            "StatusBadge.TLabel",
+            font=("", 9),
+            foreground="#16A34A",  # Green for "Ready"
+            background=self.CARD_BG
+        )
+        
+        # Preview controls frame (for floating bar)
+        style.configure("PreviewControls.TFrame", background=self.PREVIEW_BG)
+        
+        # Configure labelframe to have white background
+        style.configure("Card.TLabelframe", background=self.CARD_BG)
+        style.configure("Card.TLabelframe.Label", background=self.CARD_BG, font=("", 10, "bold"))
+    
     def _build_ui(self) -> None:
-        """Build the user interface."""
-        # Top toolbar (row 0)
-        self._build_toolbar()
+        """Build the user interface with Modern Dashboard layout."""
+        # Header bar (row 0)
+        self._build_header()
         
-        # Navigation toolbar (row 1) - Global full-width
-        self._build_nav_toolbar()
-        
-        # Main content area (row 2)
-        main_frame = ttk.Frame(self)
-        main_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        # Main content area (row 1) - Cards layout
+        main_frame = ttk.Frame(self, style="TFrame")
+        main_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(10, 20))
+        main_frame.configure(style="TFrame")
         
         # Configure grid for main_frame
         main_frame.grid_rowconfigure(0, weight=1)
-        main_frame.grid_columnconfigure(1, weight=1)  # Preview panel expands
+        main_frame.grid_columnconfigure(1, weight=1)  # Preview card expands
         
-        # Left panel: page list and settings
-        self._build_left_panel(main_frame)
+        # Settings Card (Left)
+        self._build_settings_card(main_frame)
         
-        # Right panel: preview
-        self._build_preview_panel(main_frame)
+        # Preview Card (Right)
+        self._build_preview_card(main_frame)
         
-        # Status bar (row 3)
+        # Status bar (row 2)
         self._build_status_bar()
+    
+    def _build_header(self) -> None:
+        """Build the slim professional header bar."""
+        header = ttk.Frame(self, style="Header.TFrame")
+        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(15, 5))
+        
+        # Left side: Open PDF button
+        self._open_btn = ttk.Button(
+            header, 
+            text="📂 Open PDF",
+            bootstyle="secondary-outline",
+            command=self._open_file
+        )
+        self._open_btn.pack(side=LEFT, padx=(0, 10))
+        
+        # Export button (Primary Action - solid blue)
+        self._export_btn = ttk.Button(
+            header,
+            text="💾 Export",
+            bootstyle="primary",
+            command=self._start_export,
+            state=DISABLED
+        )
+        self._export_btn.pack(side=LEFT, padx=(0, 5))
+        
+        # Status badge next to Export
+        self._status_badge = ttk.Label(
+            header,
+            text="● Ready",
+            style="StatusBadge.TLabel"
+        )
+        self._status_badge.pack(side=LEFT, padx=(5, 15))
+        
+        # Cancel button (hidden initially)
+        self._cancel_btn = ttk.Button(
+            header,
+            text="⏹ Cancel",
+            bootstyle="danger-outline",
+            command=self._cancel_operation
+        )
+        
+        # Separator
+        ttk.Separator(header, orient=VERTICAL).pack(side=LEFT, fill=Y, padx=15)
+        
+        # Redaction mode toggle
+        self._redaction_var = tk.BooleanVar(value=False)
+        self._redaction_check = ttk.Checkbutton(
+            header,
+            text="✏️ Redaction Mode",
+            variable=self._redaction_var,
+            bootstyle="warning-round-toggle",
+            command=self._toggle_redaction_mode
+        )
+        self._redaction_check.pack(side=LEFT, padx=5)
+        
+        # Right side: File name label
+        self._file_label = ttk.Label(
+            header,
+            text="",
+            font=("", 10, "italic"),
+            foreground="#64748B"
+        )
+        self._file_label.pack(side=RIGHT, padx=10)
+    
+    def _build_settings_card(self, parent) -> None:
+        """Build the Settings Card (left panel)."""
+        # Card container with padding
+        card = ttk.Frame(parent, style="Card.TFrame", padding=15)
+        card.grid(row=0, column=0, sticky="ns", padx=(0, 15))
+        
+        # Fixed width for settings card
+        card.configure(width=320)
+        card.grid_propagate(False)
+        
+        # Page list section
+        self._build_page_list(card)
+        
+        # Settings section  
+        self._build_settings_panel(card)
     
     def _build_toolbar(self) -> None:
         """Build the top toolbar with primary actions."""
@@ -883,21 +1009,30 @@ class Application(TkinterDnD.Tk):
         self._build_settings_panel(left_frame)
     
     def _build_page_list(self, parent) -> None:
-        """Build the page list."""
-        list_frame = ttk.LabelFrame(parent, text="Document Pages")
-        list_frame.pack(fill=BOTH, expand=True, pady=(0, 10))
+        """Build the page list with card styling."""
+        # Section header
+        ttk.Label(
+            parent,
+            text="Document Pages",
+            style="SectionHeader.TLabel"
+        ).pack(anchor=W, pady=(0, 8))
+        
+        # List container
+        list_frame = ttk.Frame(parent, style="Card.TFrame")
+        list_frame.pack(fill=BOTH, expand=True, pady=(0, 15))
         
         # Empty state label
         self._empty_label = ttk.Label(
             list_frame,
             text="📄 Open a PDF to begin",
             font=("", 11),
-            foreground="gray"
+            foreground="#94A3B8",
+            background=self.CARD_BG
         )
-        self._empty_label.pack(expand=True)
+        self._empty_label.pack(expand=True, pady=30)
         
         # Page listbox with scrollbar
-        self._page_list_frame = ttk.Frame(list_frame)
+        self._page_list_frame = ttk.Frame(list_frame, style="Card.TFrame")
         
         self._page_listbox = tk.Listbox(
             self._page_list_frame,
@@ -905,7 +1040,11 @@ class Application(TkinterDnD.Tk):
             selectmode=SINGLE,
             activestyle="none",
             highlightthickness=0,
-            bd=0
+            bd=1,
+            relief="flat",
+            bg=self.CARD_BG,
+            selectbackground=self.ACCENT_COLOR,
+            selectforeground="white"
         )
         self._page_listbox.bind("<<ListboxSelect>>", self._on_page_select)
         
@@ -917,14 +1056,25 @@ class Application(TkinterDnD.Tk):
     
     def _build_settings_panel(self, parent) -> None:
         """Build the settings panel with presets and advanced options."""
-        settings_frame = ttk.LabelFrame(parent, text="Settings")
+        # Section header
+        ttk.Label(
+            parent,
+            text="Settings",
+            style="SectionHeader.TLabel"
+        ).pack(anchor=W, pady=(0, 10))
+        
+        settings_frame = ttk.Frame(parent, style="Card.TFrame")
         settings_frame.pack(fill=X)
         
         # Hide Answers Strength
-        ttk.Label(settings_frame, text="Hide Answers Strength:", font=("", 10, "bold")).pack(anchor=W)
+        ttk.Label(
+            settings_frame,
+            text="Hide Answers Strength",
+            style="SectionHeader.TLabel"
+        ).pack(anchor=W, pady=(0, 8))
         
-        strength_frame = ttk.Frame(settings_frame)
-        strength_frame.pack(fill=X, pady=(5, 10))
+        strength_frame = ttk.Frame(settings_frame, style="Card.TFrame")
+        strength_frame.pack(fill=X, pady=(0, 15))
         
         self._strength_var = tk.StringVar(value=self._settings.strength_preset.value)
         for preset in StrengthPreset:
@@ -935,14 +1085,18 @@ class Application(TkinterDnD.Tk):
                 value=preset.value,
                 variable=self._strength_var,
                 command=self._on_strength_change,
-                bootstyle="info-toolbutton"
-            ).pack(side=LEFT, padx=2, expand=True, fill=X)
+                bootstyle="primary-toolbutton"  # Uses accent color when active
+            ).pack(side=LEFT, padx=(0, 4), expand=True, fill=X)
         
         # Output Quality
-        ttk.Label(settings_frame, text="Output Quality:", font=("", 10, "bold")).pack(anchor=W, pady=(5, 0))
+        ttk.Label(
+            settings_frame,
+            text="Output Quality",
+            style="SectionHeader.TLabel"
+        ).pack(anchor=W, pady=(0, 8))
         
-        output_frame = ttk.Frame(settings_frame)
-        output_frame.pack(fill=X, pady=(5, 10))
+        output_frame = ttk.Frame(settings_frame, style="Card.TFrame")
+        output_frame.pack(fill=X, pady=(0, 15))
         
         self._output_var = tk.StringVar(value=self._settings.output_preset.value)
         ttk.Radiobutton(
@@ -951,16 +1105,16 @@ class Application(TkinterDnD.Tk):
             value=OutputPreset.HIGH_QUALITY.value,
             variable=self._output_var,
             command=self._on_output_change,
-            bootstyle="success-toolbutton"
-        ).pack(side=LEFT, padx=2, expand=True, fill=X)
+            bootstyle="primary-toolbutton"
+        ).pack(side=LEFT, padx=(0, 4), expand=True, fill=X)
         ttk.Radiobutton(
             output_frame,
             text="Balanced",
             value=OutputPreset.BALANCED.value,
             variable=self._output_var,
             command=self._on_output_change,
-            bootstyle="success-toolbutton"
-        ).pack(side=LEFT, padx=2, expand=True, fill=X)
+            bootstyle="primary-toolbutton"
+        ).pack(side=LEFT, padx=(0, 4), expand=True, fill=X)
         
         # Advanced expander
         self._advanced_var = tk.BooleanVar(value=False)
@@ -971,9 +1125,9 @@ class Application(TkinterDnD.Tk):
             command=self._toggle_advanced,
             bootstyle="secondary-outline-toolbutton"
         )
-        advanced_toggle.pack(fill=X, pady=(5, 0))
+        advanced_toggle.pack(fill=X, pady=(10, 0))
         
-        self._advanced_frame = ttk.Frame(settings_frame)
+        self._advanced_frame = ttk.Frame(settings_frame, style="Card.TFrame")
         self._build_advanced_options()
     
     def _build_advanced_options(self) -> None:
@@ -1038,28 +1192,144 @@ class Application(TkinterDnD.Tk):
             self._advanced_frame.pack_forget()
     
     def _build_preview_panel(self, parent) -> None:
-        """Build the right preview panel."""
-        preview_frame = ttk.Frame(parent)
-        preview_frame.grid(row=0, column=1, sticky="nsew")
+        """Build the right preview panel (legacy, kept for compatibility)."""
+        self._build_preview_card(parent)
+    
+    def _build_preview_card(self, parent) -> None:
+        """Build the Preview Card with dark background and floating controls."""
+        # Preview card container
+        preview_card = ttk.Frame(parent, style="Card.TFrame", padding=0)
+        preview_card.grid(row=0, column=1, sticky="nsew")
         
-        # Preview canvas
-        canvas_frame = ttk.Frame(preview_frame, bootstyle="dark")
-        canvas_frame.pack(fill=BOTH, expand=True)
+        # Configure grid for preview card
+        preview_card.grid_rowconfigure(0, weight=1)
+        preview_card.grid_columnconfigure(0, weight=1)
         
+        # Dark preview area
+        preview_area = tk.Frame(preview_card, bg=self.PREVIEW_BG)
+        preview_area.grid(row=0, column=0, sticky="nsew")
+        preview_area.grid_rowconfigure(0, weight=1)
+        preview_area.grid_columnconfigure(0, weight=1)
+        
+        # Preview canvas with dark background
         self._preview_canvas = PreviewCanvas(
-            canvas_frame,
-            bg="#f8f9fa",
+            preview_area,
+            bg=self.PREVIEW_BG,
             highlightthickness=0
         )
-        self._preview_canvas.pack(fill=BOTH, expand=True, padx=2, pady=2)
+        self._preview_canvas.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        
+        # Floating controls bar at bottom-center
+        self._build_floating_controls(preview_area)
+    
+    def _build_floating_controls(self, parent) -> None:
+        """Build the floating controls bar at the bottom of the preview."""
+        # Container for floating bar (centered at bottom)
+        controls_container = tk.Frame(parent, bg=self.PREVIEW_BG)
+        controls_container.grid(row=1, column=0, sticky="ew", pady=(0, 15))
+        
+        # Center the controls bar
+        controls_container.grid_columnconfigure(0, weight=1)
+        controls_container.grid_columnconfigure(2, weight=1)
+        
+        # Floating bar frame (semi-transparent look with card background)
+        floating_bar = ttk.Frame(controls_container, style="Card.TFrame", padding=(15, 8))
+        floating_bar.grid(row=0, column=1)
+        
+        # Page Navigation
+        ttk.Button(
+            floating_bar,
+            text="◀",
+            width=3,
+            command=self._prev_page,
+            bootstyle="secondary-outline"
+        ).pack(side=LEFT, padx=(0, 5))
+        
+        self._page_label = ttk.Label(
+            floating_bar,
+            text="Page 0 / 0",
+            font=("", 10),
+            background=self.CARD_BG
+        )
+        self._page_label.pack(side=LEFT, padx=5)
+        
+        ttk.Button(
+            floating_bar,
+            text="▶",
+            width=3,
+            command=self._next_page,
+            bootstyle="secondary-outline"
+        ).pack(side=LEFT, padx=(5, 15))
+        
+        # Separator
+        ttk.Separator(floating_bar, orient=VERTICAL).pack(side=LEFT, fill=Y, padx=10)
+        
+        # Zoom controls
+        ttk.Button(
+            floating_bar,
+            text="−",
+            width=3,
+            command=self._zoom_out,
+            bootstyle="secondary-outline"
+        ).pack(side=LEFT, padx=(0, 5))
+        
+        self._zoom_label = ttk.Label(
+            floating_bar,
+            text="100%",
+            width=6,
+            background=self.CARD_BG
+        )
+        self._zoom_label.pack(side=LEFT)
+        
+        ttk.Button(
+            floating_bar,
+            text="+",
+            width=3,
+            command=self._zoom_in,
+            bootstyle="secondary-outline"
+        ).pack(side=LEFT, padx=(5, 10))
+        
+        ttk.Button(
+            floating_bar,
+            text="Fit",
+            command=self._fit_to_window,
+            bootstyle="secondary-outline"
+        ).pack(side=LEFT, padx=(0, 15))
+        
+        # Separator
+        ttk.Separator(floating_bar, orient=VERTICAL).pack(side=LEFT, fill=Y, padx=10)
+        
+        # Redaction controls
+        self._undo_btn = ttk.Button(
+            floating_bar,
+            text="↩ Undo",
+            command=self._undo_last_redaction,
+            bootstyle="secondary-outline",
+            state=DISABLED
+        )
+        self._undo_btn.pack(side=LEFT, padx=(0, 5))
+        
+        self._delete_rect_btn = ttk.Button(
+            floating_bar,
+            text="🗑 Delete",
+            command=self._delete_selected_rect,
+            bootstyle="danger-outline",
+            state=DISABLED
+        )
+        self._delete_rect_btn.pack(side=LEFT)
     
     def _build_status_bar(self) -> None:
         """Build the status bar."""
-        self._status_frame = ttk.Frame(self)
-        self._status_frame.grid(row=3, column=0, sticky="ew")
+        self._status_frame = ttk.Frame(self, style="Card.TFrame")
+        self._status_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
         
-        self._status_label = ttk.Label(self._status_frame, text="Ready", font=("", 9))
-        self._status_label.pack(side=LEFT)
+        self._status_label = ttk.Label(
+            self._status_frame,
+            text="Ready",
+            font=("", 9),
+            foreground="#64748B"
+        )
+        self._status_label.pack(side=LEFT, padx=10, pady=5)
         
         # Progress bar (hidden initially)
         self._progress_var = tk.DoubleVar(value=0)
@@ -1067,7 +1337,7 @@ class Application(TkinterDnD.Tk):
             self._status_frame, 
             variable=self._progress_var, 
             maximum=100,
-            bootstyle="success-striped",
+            bootstyle="primary-striped",
             length=200
         )
     
