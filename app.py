@@ -899,18 +899,18 @@ class Application(TkinterDnD.Tk):
     def _build_settings_card(self, parent) -> None:
         """Build the Settings Card (left panel)."""
         # Card container with padding
-        card = ttk.Frame(parent, style="Card.TFrame", padding=15)
-        card.grid(row=0, column=0, sticky="ns", padx=(0, 15))
+        self._sidebar_frame = ttk.Frame(parent, style="Card.TFrame", padding=15)
+        self._sidebar_frame.grid(row=0, column=0, sticky="ns", padx=(0, 15))
         
         # Fixed width for settings card
-        card.configure(width=320)
-        card.grid_propagate(False)
+        self._sidebar_frame.configure(width=320)
+        self._sidebar_frame.grid_propagate(False)
         
         # Page list section
-        self._build_page_list(card)
+        self._build_page_list(self._sidebar_frame)
         
         # Settings section  
-        self._build_settings_panel(card)
+        self._build_settings_panel(self._sidebar_frame)
     
     def _build_toolbar(self) -> None:
         """Build the top toolbar with primary actions."""
