@@ -142,6 +142,11 @@ class PreviewCanvas(tk.Canvas):
         
         # Focus for keyboard events
         self.bind("<Button-1>", lambda e: self.focus_set(), add="+")
+        
+        # Spacebar panning
+        self._space_pressed = False
+        self.bind("<KeyPress-space>", self._on_space_press)
+        self.bind("<KeyRelease-space>", self._on_space_release)
     
     def set_image(self, img: Image.Image) -> None:
         """Set the image to display."""
@@ -464,8 +469,24 @@ class PreviewCanvas(tk.Canvas):
         
         self.config(scrollregion=(0, 0, req_w, req_h))
     
+    def _on_space_press(self, event: tk.Event) -> None:
+        """Handle spacebar press for panning."""
+        self._space_pressed = True
+        self._drag_mode = "pan_armed"
+        self.config(cursor="hand2")
+
+    def _on_space_release(self, event: tk.Event) -> None:
+        """Handle spacebar release."""
+        self._space_pressed = False
+        self._drag_mode = "pan"
+        self.config(cursor="crosshair" if self._redaction_mode else "")
+
     def _on_button_press(self, event: tk.Event) -> None:
         """Handle mouse button press."""
+        if self._drag_mode == "pan_armed":
+            self.scan_mark(event.x, event.y)
+            return
+
         # Translate window coords (event.x) to canvas coords (canvasx)
         cx = self.canvasx(event.x)
         cy = self.canvasy(event.y)
