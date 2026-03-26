@@ -1,0 +1,2 @@
+{"type":"click","text":"C\n    \n      Enterprise Modular Architecture\n      Refactor the current codebase into a strict MVC pattern. Add a plugin system, and use C++ bindings (PyBind11) or Numba to massively speed up the image processing.","choice":"architecture","id":null,"timestamp":1774518025120}
+{"type":"click","text":"A\n    \n      Full-Stack SaaS Pivot\n      Convert this from a desktop script to a modern web app. Use React (Next.js) for the frontend, FastAPI for the backend, and Celery for async PDF rendering.","choice":"web","id":null,"timestamp":1774518061616}
